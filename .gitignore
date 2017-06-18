@@ -48,3 +48,5 @@ build.log
 
 # Other files
 .DS_Store
+
+*.npy
