@@ -111,10 +111,19 @@ class MarkovStateModel(BaseEstimator, _MappingTransformMixin,
 
     def __init__(self, lag_time=1, n_timescales=None, reversible_type='mle',
                  ergodic_cutoff='on', prior_counts=0, sliding_window=True,
-                 verbose=True):
+                 verbose=True, cse=False):
+        # Scoring method
+        self.cse = cse
+        self._timescale_gap = None
+
         self.reversible_type = reversible_type
         self.lag_time = lag_time
-        self.n_timescales = n_timescales
+        if self.cse:
+            # forces all timescales to be calculated.
+            # TODO put warning about having both n_timescales and cse not None.
+            self.n_timescales = None
+        else:
+            self.n_timescales = n_timescales
         self.prior_counts = prior_counts
         self.sliding_window = sliding_window
         self.verbose = verbose
@@ -133,6 +142,7 @@ class MarkovStateModel(BaseEstimator, _MappingTransformMixin,
         self.n_states_ = None
         self.populations_ = None
         self.percent_retained_ = None
+
 
 
     def fit(self, sequences, y=None):
@@ -174,6 +184,9 @@ class MarkovStateModel(BaseEstimator, _MappingTransformMixin,
         except KeyError:
             raise ValueError('reversible_type must be one of %s: %s' % (
                 ', '.join(fit_method_map.keys()), self.reversible_type))
+
+        if self.cse:
+            self._set_cse_timescales()
 
         self._is_dirty = True
         return self
@@ -390,6 +403,31 @@ Timescales:
         """
         return self.eigenvalues_.sum()
 
+    def _set_cse_timescales(self):
+        """
+        Finds the largest gap in timescales and sets the
+        :return:
+        """
+        ts = self._get_clean_timescales()
+        diffs = ts[:-1] - ts[1:]
+        self.n_timescales = np.argmax(diffs) + 1
+        self.ts_gap_ = np.max(diffs)
+
+
+    def _get_clean_timescales(self):
+        """
+        Removes 'nan's from list of timescales.
+        :return: np.array of timescales with no 'nan'
+        """
+        ts = self.timescales_
+        nans = np.where(np.isnan(ts))[0]
+
+        # Check whether all the nans are at the end
+        if len(ts) - nans[0] == len(nans):
+            ts = ts[np.where(~np.isnan(ts))]
+            return ts
+        else:
+            raise RuntimeError("Missing timescales in the middle of the spectrum")
 
     def score(self, sequences, y=None):
         """Score the model on new data using the generalized matrix Rayleigh quotient

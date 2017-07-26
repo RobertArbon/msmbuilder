@@ -50,3 +50,5 @@ build.log
 .DS_Store
 
 *.npy
+
+scratch/
