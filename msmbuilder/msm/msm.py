@@ -114,13 +114,16 @@ class MarkovStateModel(BaseEstimator, _MappingTransformMixin,
                  verbose=True, cse=False):
         # Scoring method
         self.cse = cse
-        self._timescale_gap = None
+        self.timescale_gap_ = None
 
         self.reversible_type = reversible_type
         self.lag_time = lag_time
+
+        if cse and n_timescales is not None:
+            raise ValueError("Please specify either n_timescales or cse, "
+                             "not both")
         if self.cse:
             # forces all timescales to be calculated.
-            # TODO put warning about having both n_timescales and cse not None.
             self.n_timescales = None
         else:
             self.n_timescales = n_timescales
@@ -406,12 +409,12 @@ Timescales:
     def _set_cse_timescales(self):
         """
         Finds the largest gap in timescales and sets the
-        :return:
+        :return: None
         """
         ts = self._get_clean_timescales()
         diffs = ts[:-1] - ts[1:]
         self.n_timescales = np.argmax(diffs) + 1
-        self.ts_gap_ = np.max(diffs)
+        self.timescale_gap_ = np.max(diffs)
 
 
     def _get_clean_timescales(self):
