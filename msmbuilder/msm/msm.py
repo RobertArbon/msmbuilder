@@ -78,6 +78,8 @@ class MarkovStateModel(BaseEstimator, _MappingTransformMixin,
         interval of ``lag_time``.
     verbose : bool
         Enable verbose printout
+    use_gap : None or {'eigenvalue', 'timescale'}, default = None
+        Use the gap in eigenvalues or gap in timescale ratios to determine the number of timescales to keep.
 
     References
     ----------
@@ -111,19 +113,22 @@ class MarkovStateModel(BaseEstimator, _MappingTransformMixin,
 
     def __init__(self, lag_time=1, n_timescales=None, reversible_type='mle',
                  ergodic_cutoff='on', prior_counts=0, sliding_window=True,
-                 verbose=True, cse=False):
-        # Scoring method
-        self.cse = cse
-        self.timescale_gap_ = None
+                 verbose=True, use_gap=None):
+
+        # Use eigenvalue or timescale separation
+        self.use_gap = use_gap
+        self.gap_ = None
 
         self.reversible_type = reversible_type
         self.lag_time = lag_time
 
-        if cse and n_timescales is not None:
-            raise ValueError("Please specify either n_timescales or cse, "
-                             "not both")
-        if self.cse:
-            # forces all timescales to be calculated.
+        if self.use_gap is not None:
+            if n_timescales is not None:
+                raise ValueError("Please specify either n_timescales or use_gap, "
+                                 "but not both")
+            elif self.use_gap not in ['eigenvalues', 'timescales']:
+                raise ValueError("Unknown option for use_gap, "
+                                 "must be either 'eigenvalues' or 'timescales'")
             self.n_timescales = None
         else:
             self.n_timescales = n_timescales
@@ -189,8 +194,8 @@ class MarkovStateModel(BaseEstimator, _MappingTransformMixin,
             raise ValueError('reversible_type must be one of %s: %s' % (
                 ', '.join(fit_method_map.keys()), self.reversible_type))
 
-        if self.cse:
-            self._set_cse_timescales()
+        if self.use_gap is not None:
+            self._set_n_timescales()
 
         self._is_dirty = True
         return self
@@ -407,36 +412,42 @@ Timescales:
         """
         return self.eigenvalues_.sum()
 
-    def _set_cse_timescales(self):
+    def _set_n_timescales(self):
         """
-        Finds the largest gap in timescales and sets n_timescales accordingly.
+        Finds the largest gap in timescales or eigenvalues and sets n_timescales accordingly.
         :return: None
         """
-        ts = self._get_clean_timescales()
-        diffs = ts[:-1] - ts[1:]
-        n_cse = np.argmax(diffs) + 1
-        self.n_timescales = n_cse
-        self.timescale_gap_ = np.max(diffs)
-        ratio = ts[n_cse-1]/ts[n_cse]
+
+        # Get all timescales that aren't nans
+        timescales = self.timescales_
+        nan_idx = np.where(np.isnan(timescales))[0][0]
+        timescales = timescales[:nan_idx]
+
+        # get all the timescales that are longer than lag-time
+        robust_idx = np.where(timescales > self.lag_time)[0][-1]
+
+        if not robust_idx.size:
+            raise RuntimeError("No timescales longer than lag time")
+        if np.any(self.eigenvalues_[:robust_idx]<=0):
+            raise RuntimeError("Error in timescale calculations")
+
+        # Get spectrum to use
+        if self.use_gap == 'eigenvalues':
+            spectrum = self.eigenvalues_[:robust_idx]
+            # Ratios here would be very sensitive to numerical noise in the fast motions.
+            spec_diff = spectrum[:-1] - spectrum[1:]
+        elif self.use_gap == 'timescales':
+            spectrum = self.timescales_[:robust_idx]
+            spec_diff = spectrum[:-1] / spectrum[1:]
+
+        # Calculate gap.
+        self.n_timescales = np.argmax(spec_diff) + 1
+        self.gap_ = np.max(spec_diff)
+
         if self.verbose:
-            print('Setting n_timescales to {0} with a timescale gap of {1:8.2f}.  '
-                  'Ratio of slow:fast {2:8.2f}'.format(self.n_timescales, self.timescale_gap_, ratio))
+            print('Setting n_timescales to {0} with a {2} gap of {1:#.2e}'.format(
+                self.n_timescales, self.gap_, self.use_gap))
 
-
-    def _get_clean_timescales(self):
-        """
-        Removes 'nan's from list of timescales.
-        :return: np.array of timescales with no 'nan'
-        """
-        ts = self.timescales_
-        nans = np.where(np.isnan(ts))[0]
-
-        # Check whether all the nans are at the end
-        if len(ts) - nans[0] == len(nans):
-            ts = ts[np.where(~np.isnan(ts))]
-            return ts
-        else:
-            raise RuntimeError("Missing timescales in the middle of the spectrum")
 
     def score(self, sequences, y=None):
         """Score the model on new data using the generalized matrix Rayleigh quotient
