@@ -127,6 +127,7 @@ class MarkovStateModel(BaseEstimator, _MappingTransformMixin,
             self.n_timescales = None
         else:
             self.n_timescales = n_timescales
+
         self.prior_counts = prior_counts
         self.sliding_window = sliding_window
         self.verbose = verbose
@@ -413,8 +414,13 @@ Timescales:
         """
         ts = self._get_clean_timescales()
         diffs = ts[:-1] - ts[1:]
-        self.n_timescales = np.argmax(diffs) + 1
+        n_cse = np.argmax(diffs) + 1
+        self.n_timescales = n_cse
         self.timescale_gap_ = np.max(diffs)
+        ratio = ts[n_cse-1]/ts[n_cse]
+        if self.verbose:
+            print('Setting n_timescales to {0} with a timescale gap of {1}.  '
+                  'Ratio of slow:fast {2}'.format(self.n_timescales, self.timescale_gap_, ratio))
 
 
     def _get_clean_timescales(self):
