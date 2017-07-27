@@ -409,7 +409,7 @@ Timescales:
 
     def _set_cse_timescales(self):
         """
-        Finds the largest gap in timescales and sets the
+        Finds the largest gap in timescales and sets n_timescales accordingly.
         :return: None
         """
         ts = self._get_clean_timescales()
@@ -419,8 +419,8 @@ Timescales:
         self.timescale_gap_ = np.max(diffs)
         ratio = ts[n_cse-1]/ts[n_cse]
         if self.verbose:
-            print('Setting n_timescales to {0} with a timescale gap of {1}.  '
-                  'Ratio of slow:fast {2}'.format(self.n_timescales, self.timescale_gap_, ratio))
+            print('Setting n_timescales to {0} with a timescale gap of {1:8.2f}.  '
+                  'Ratio of slow:fast {2:8.2f}'.format(self.n_timescales, self.timescale_gap_, ratio))
 
 
     def _get_clean_timescales(self):
