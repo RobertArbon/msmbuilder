@@ -433,21 +433,26 @@ Timescales:
 
         # Get spectrum to use
         if self.use_gap == 'eigenvalues':
-            spectrum = self.eigenvalues_[:robust_idx]
+            spectrum = self.eigenvalues_[1:robust_idx+1]
             # Ratios here would be very sensitive to numerical noise in the fast motions.
             spec_diff = spectrum[:-1] - spectrum[1:]
+            self.n_timescales = np.argmax(spec_diff)+1
+
         elif self.use_gap == 'timescales':
             spectrum = self.timescales_[:robust_idx]
             spec_diff = spectrum[:-1] / spectrum[1:]
+            self.n_timescales = np.argmax(spec_diff) + 1
+
+        self.gap_ = np.max(spec_diff)
 
         # Calculate gap.
-        self.n_timescales = np.argmax(spec_diff) + 1
-        self.gap_ = np.max(spec_diff)
 
         if self.verbose:
             print('Setting n_timescales to {0} with a {2} gap of {1:#.2e}'.format(
                 self.n_timescales, self.gap_, self.use_gap))
 
+        # Switch use_gap off once it's been calculated.  Assumes we only call fit again to score model.
+        self.use_gap = None
 
     def score(self, sequences, y=None):
         """Score the model on new data using the generalized matrix Rayleigh quotient
