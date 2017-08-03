@@ -117,7 +117,7 @@ class MarkovStateModel(BaseEstimator, _MappingTransformMixin,
 
         # Use eigenvalue or timescale separation
         self.use_gap = use_gap
-        self.gap_ = None
+        self.gap_ = 0
 
         self.reversible_type = reversible_type
         self.lag_time = lag_time
@@ -420,33 +420,46 @@ Timescales:
 
         # Get all timescales that aren't nans
         timescales = self.timescales_
-        nan_idx = np.where(np.isnan(timescales))[0][0]
-        timescales = timescales[:nan_idx]
+        n_ts = len(timescales)
+
+        nan_idx = np.where(np.isnan(timescales))[0]
+        if len(nan_idx) > 0:
+            timescales = timescales[:nan_idx[0]]
 
         # get all the timescales that are longer than lag-time
-        robust_idx = np.where(timescales > self.lag_time)[0][-1]
+        robust_idx = np.where(timescales > self.lag_time)[0]
+        if self.verbose:
+            print('Keeping {0} robust timescales from {1} timescales'.format(len(robust_idx), n_ts))
 
-        if not robust_idx.size:
+        # No timescales - abort!
+        if not robust_idx.shape[0]:
             raise RuntimeError("No timescales longer than lag time")
-        if np.any(self.eigenvalues_[:robust_idx]<=0):
-            raise RuntimeError("Error in timescale calculations")
 
-        # Get spectrum to use
-        if self.use_gap == 'eigenvalues':
-            spectrum = self.eigenvalues_[1:robust_idx+1]
-            # Ratios here would be very sensitive to numerical noise in the fast motions.
-            spec_diff = spectrum[:-1] - spectrum[1:]
-            self.n_timescales = np.argmax(spec_diff)+1
+        # Only one timescale which is longer than the lag time
+        elif robust_idx.shape[0] == 1:
+            self.n_timescales = 1
 
-        elif self.use_gap == 'timescales':
-            spectrum = self.timescales_[:robust_idx]
-            spec_diff = spectrum[:-1] / spectrum[1:]
-            self.n_timescales = np.argmax(spec_diff) + 1
+        # More than one timescale which is longer than lag time.  Find gap and set n_timescales accordingly
+        elif robust_idx.shape[0] > 1:
 
-        self.gap_ = np.max(spec_diff)
+            # Get spectrum to use
+            if self.use_gap == 'eigenvalues':
+                spectrum = self.eigenvalues_[1:robust_idx[-1] + 1]
+                # Ratios here would be very sensitive to numerical noise in the fast motions.
+                spec_diff = spectrum[:-1] - spectrum[1:]
+                self.n_timescales = np.argmax(spec_diff) + 1
 
-        # Calculate gap.
+            elif self.use_gap == 'timescales':
+                spectrum = self.timescales_[:robust_idx[-1]]
+                spec_diff = spectrum[:-1] / spectrum[1:]
+                self.n_timescales = np.argmax(spec_diff) + 1
 
+            self.gap_ = np.max(spec_diff)
+
+        # elif np.any(self.eigenvalues_[:robust_idx[-1]]<=0):
+        #     raise RuntimeError("Error in timescale calculations")
+
+        # Print summary
         if self.verbose:
             print('Setting n_timescales to {0} with a {2} gap of {1:#.2e}'.format(
                 self.n_timescales, self.gap_, self.use_gap))
