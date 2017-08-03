@@ -426,11 +426,10 @@ Timescales:
         if len(nan_idx) > 0:
             timescales = timescales[:nan_idx[0]]
 
-        if self.verbose:
-            print('Keeping {0}/{1} timescales'.format(len(timescales), n_ts))
-
         # get all the timescales that are longer than lag-time
         robust_idx = np.where(timescales > self.lag_time)[0]
+        if self.verbose:
+            print('Keeping {0} robust timescales from {1} timescales'.format(len(robust_idx), n_ts))
 
         # No timescales - abort!
         if not robust_idx.shape[0]:
