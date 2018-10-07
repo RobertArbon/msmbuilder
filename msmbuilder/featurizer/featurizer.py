@@ -15,6 +15,7 @@ import numpy as np
 import sklearn.pipeline
 from scipy.stats import vonmises as vm
 from msmbuilder import libdistance
+from msmbuilder.utils import unique
 import itertools
 import inspect
 from sklearn.base import TransformerMixin
@@ -26,11 +27,11 @@ def zippy_maker(aind_tuples, top):
     resids = []
     resnames = []
     for ainds in aind_tuples:
-        resid = set(top.atom(ai).residue.index for ai in ainds)
+        resid = unique([top.atom(ai).residue.index for ai in ainds])
         resids += [list(resid)]
-        reseq = set(top.atom(ai).residue.resSeq for ai in ainds)
+        reseq = unique([top.atom(ai).residue.resSeq for ai in ainds])
         resseqs += [list(reseq)]
-        resname = set(top.atom(ai).residue.name for ai in ainds)
+        resname = unique([top.atom(ai).residue.name for ai in ainds])
         resnames += [list(resname)]
 
     return zip(aind_tuples, resseqs, resids, resnames)
@@ -684,14 +685,23 @@ class VonMisesFeaturizer(Featurizer):
         if not isinstance(kappa, (int, float)):
             raise TypeError('kappa must be numeric.')
 
-        self.loc = np.linspace(0, 2*np.pi, n_bins)
+        self._n_bins = n_bins
+        self.loc = np.linspace(0, 2*np.pi, self.n_bins)
         self.kappa = kappa
-        self.n_bins = n_bins
 
         known = {'phi', 'psi', 'omega', 'chi1', 'chi2', 'chi3', 'chi4'}
         if not set(types).issubset(known):
             raise ValueError('angles must be a subset of %s. you supplied %s' %
                              (str(known), str(types)))
+
+    @property
+    def n_bins(self):
+        return self._n_bins
+
+    @n_bins.setter
+    def n_bins(self, x):
+        self._n_bins = x  
+        self.loc = np.linspace(0, 2*np.pi, self.n_bins)
 
     def describe_features(self, traj):
         """Return a list of dictionaries describing the dihderal features.
@@ -892,26 +902,31 @@ class KappaAngleFeaturizer(Featurizer):
     """Featurizer to extract kappa angles.
 
     The kappa angle of residue `i` is the angle formed by the three CA atoms
-    of residues `i-2`, `i` and `i+2`. This featurizer extracts the
-    `n_residues - 4` kappa angles of each frame in a trajectory.
+    of residues `i-offset`, `i` and `i+offset`. This featurizer extracts the
+    `n_residues - 2*offset` kappa angles of each frame in a trajectory.
 
     Parameters
     ----------
     cos : bool
         Compute the cosine of the angle instead of the angle itself.
+    offset : int
+        Offset to use for when calculating the features. Defaults to 2.
+        I.e it will calculate the angles between i-2, i and i+2 CA
     """
 
-    def __init__(self, cos=True):
+    def __init__(self, cos=True, offset=2):
         self.cos = cos
         self.atom_indices = None
+        self.offset = offset
 
     def partial_transform(self, traj):
         ca = [a.index for a in traj.top.atoms if a.name == 'CA']
-        if len(ca) < 5:
+        if len(ca) < 2*self.offset + 1:
             return np.zeros((len(traj), 0), dtype=np.float32)
 
         angle_indices = np.array(
-            [(ca[i - 2], ca[i], ca[i + 2]) for i in range(2, len(ca) - 2)])
+            [(ca[i - self.offset], ca[i],
+              ca[i + self.offset]) for i in range(self.offset, len(ca) - self.offset)])
         result = md.compute_angles(traj, angle_indices)
 
         if self.atom_indices is None:
@@ -919,7 +934,6 @@ class KappaAngleFeaturizer(Featurizer):
         if self.cos:
             return np.cos(result)
 
-        assert result.shape == (traj.n_frames, traj.n_residues - 4)
         return result
 
 
@@ -966,6 +980,78 @@ class KappaAngleFeaturizer(Featurizer):
         return feature_descs
 
 
+class AngleFeaturizer(Featurizer):
+    """Featurizer based on angles between 3 atoms.
+
+    This featurizer transforms a dataset containing MD trajectories into
+    a vector dataset by representing each frame in each of the MD trajectories
+    by a vector of the angles between triples of amino-acid residues.
+
+    Parameters
+    ----------
+    angle_indices : list of tuples
+        List of triplet atoms to compute the angles for. Please ensure that
+        they are properly sorted
+    cos : bool
+        Compute the cosine of the angle instead of the angle itself.
+    """
+
+    def __init__(self, angle_indices=None, cos=True):
+        if angle_indices is None:
+            raise ValueError("Need to specify atom triplets to use")
+        self.angle_indices = np.vstack(angle_indices)
+        self.cos = cos
+
+    def partial_transform(self, traj):
+        result = md.compute_angles(traj, self.angle_indices)
+
+        if self.cos:
+            return np.cos(result)
+
+        return result
+
+
+    def describe_features(self, traj):
+        """Return a list of dictionaries describing the dihderal features.
+
+        Parameters
+        ----------
+        traj : mdtraj.Trajectory
+            The trajectory to describe
+
+        Returns
+        -------
+        feature_descs : list of dict
+            Dictionary describing each feature with the following information
+            about the atoms participating in each dihedral
+                - resnames: unique names of residues
+                - atominds: the four atom indicies
+                - resseqs: unique residue sequence ids (not necessarily
+                  0-indexed)
+                - resids: unique residue ids (0-indexed)
+                - featurizer: KappaAngle
+                - featuregroup: the type of dihedral angle and whether
+                  cos has been applied.
+        """
+        feature_descs = []
+        # fill in the atom indices using just the first frame
+        self.partial_transform(traj[0])
+        top = traj.topology
+        if self.angle_indices is None:
+            raise ValueError("Cannot describe features for trajectories")
+        aind_tuples = self.angle_indices
+        zippy = zippy_maker(aind_tuples, top)
+        if self.cos:
+            zippy = itertools.product(["Angle"],["N/A"], ['cos'], zippy)
+        else:
+            zippy = itertools.product(["Angle"],["N/A"], ['nocos'], zippy)
+
+        feature_descs.extend(dict_maker(zippy))
+
+
+        return feature_descs
+
+
 class SASAFeaturizer(Featurizer):
     """Featurizer based on solvent-accessible surface areas.
 
@@ -996,6 +1082,52 @@ class SASAFeaturizer(Featurizer):
 
     def partial_transform(self, traj):
         return md.shrake_rupley(traj, mode=self.mode, **self.kwargs)
+
+    def describe_features(self, traj):
+        """Return a list of dictionaries describing the SASA features.
+
+        Parameters
+        ----------
+        traj : mdtraj.Trajectory
+            The trajectory to describe
+
+        Returns
+        -------
+        feature_descs : list of dict
+            Dictionary describing each feature with the following information
+            about the atoms participating in each SASA feature
+                - resnames: names of residues
+                - atominds: atom index or atom indices in mode="residue"
+                - resseqs: residue ids (not necessarily 0-indexed)
+                - resids: unique residue ids (0-indexed)
+                - featurizer: SASA
+                - featuregroup: atom or residue
+        """
+
+        feature_descs = []
+        _, mapping = md.geometry.sasa.shrake_rupley(traj, mode=self.mode, get_mapping=True)
+        top = traj.topology
+
+        if self.mode == "residue":
+            resids = np.unique(mapping)
+            resseqs = [top.residue(ri).resSeq for ri in resids]
+            resnames = [top.residue(ri).name for ri in resids]
+            atoms_in_res = [res.atoms for res in top.residues]
+            aind_tuples = []
+            # For each resdiue...
+            for i,x in enumerate(atoms_in_res):
+                # For each atom in the residues, append it's index
+                aind_tuples.append([atom.index for atom in x])
+            zippy = itertools.product(['SASA'],['N/A'],[self.mode], zip(aind_tuples, resseqs, resids, resnames))
+        else:
+            resids = [top.atom(ai).residue.index for ai in mapping]
+            resseqs = [top.atom(ai).residue.resSeq for ai in mapping]
+            resnames = [top.atom(ai).residue.name for ai in mapping]
+            zippy = itertools.product(['SASA'],['N/A'],[self.mode], zip(mapping, resseqs, resids, resnames))
+
+        feature_descs.extend(dict_maker(zippy))
+
+        return feature_descs
 
 
 class ContactFeaturizer(Featurizer):
@@ -1040,10 +1172,12 @@ class ContactFeaturizer(Featurizer):
     soft_min_beta : float, default=20nm
         The value of beta to use for the soft_min distance option.
         Very large values might cause small contact distances to go to 0.
+    periodic : bool, default=True
+        If True, compute distances using periodic boundary conditions.
     """
 
     def __init__(self, contacts='all', scheme='closest-heavy', ignore_nonprotein=True,
-                 soft_min=False, soft_min_beta=20):
+                 soft_min=False, soft_min_beta=20, periodic=True):
         self.contacts = contacts
         self.scheme = scheme
         self.ignore_nonprotein = ignore_nonprotein
@@ -1052,6 +1186,7 @@ class ContactFeaturizer(Featurizer):
         if self.soft_min and not 'soft_min' in inspect.signature(md.compute_contacts).parameters:
             raise ValueError("Sorry but soft_min requires the latest version"
                              "of mdtraj")
+        self.periodic = periodic
 
     def _transform(self, distances):
         return distances
@@ -1081,10 +1216,12 @@ class ContactFeaturizer(Featurizer):
             distances, _ = md.compute_contacts(traj, self.contacts,
                                                self.scheme, self.ignore_nonprotein,
                                                soft_min=self.soft_min,
-                                               soft_min_beta=self.soft_min_beta)
+                                               soft_min_beta=self.soft_min_beta,
+                                               periodic=self.periodic)
         else:
             distances, _ = md.compute_contacts(traj, self.contacts,
-                                               self.scheme, self.ignore_nonprotein)
+                                               self.scheme, self.ignore_nonprotein,
+                                               periodic=self.periodic)
         return self._transform(distances)
 
 
@@ -1117,11 +1254,13 @@ class ContactFeaturizer(Featurizer):
                                                          self.scheme,
                                                          self.ignore_nonprotein,
                                                          soft_min=self.soft_min,
-                                                         soft_min_beta=self.soft_min_beta)
+                                                         soft_min_beta=self.soft_min_beta,
+                                                         periodic=self.periodic)
         else:
             distances, residue_indices = md.compute_contacts(traj[0], self.contacts,
                                                          self.scheme,
-                                                         self.ignore_nonprotein)
+                                                         self.ignore_nonprotein,
+                                                         periodic=self.periodic)
         top = traj.topology
 
         aind = []
